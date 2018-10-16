@@ -138,6 +138,7 @@ object SparkSubmit extends CommandLineUtils with Logging {
     }
     // 根据三种行为分别处理
     appArgs.action match {
+        // 提交，调用submit方法
       case SparkSubmitAction.SUBMIT => submit(appArgs, uninitLog)
       case SparkSubmitAction.KILL => kill(appArgs)
       case SparkSubmitAction.REQUEST_STATUS => requestStatus(appArgs)
@@ -177,7 +178,7 @@ object SparkSubmit extends CommandLineUtils with Logging {
   // 由于递归结果总是直接返回，尾递归比较方便转换为循环，因此编译器容易对它进行优化。
   @tailrec
   private def submit(args: SparkSubmitArguments, uninitLog: Boolean): Unit = {
-    //准备启动环境
+    // 准备启动环境
     val (childArgs, childClasspath, sparkConf, childMainClass) = prepareSubmitEnvironment(args)
 
     def doRunMain(): Unit = {
@@ -678,13 +679,16 @@ object SparkSubmit extends CommandLineUtils with Logging {
     // In standalone cluster mode, use the REST client to submit the application (Spark 1.3+).
     // All Spark parameters are expected to be passed to the client through system properties.
     if (args.isStandaloneCluster) {
+      // 如果使用Rest，则childMainClass为org.apache.spark.deploy.rest.RestSubmissionClientApp
       if (args.useRest) {
         childMainClass = REST_CLUSTER_SUBMIT_CLASS
         childArgs += (args.primaryResource, args.mainClass)
       } else {
+        // 非Rest，则childMainClass为org.apache.spark.deploy.ClientApp
         // In legacy standalone cluster mode, use Client as a wrapper around the user class
         childMainClass = STANDALONE_CLUSTER_SUBMIT_CLASS
         if (args.supervise) { childArgs += "--supervise" }
+        // 设置driverMemory
         Option(args.driverMemory).foreach { m => childArgs += ("--memory", m) }
         Option(args.driverCores).foreach { c => childArgs += ("--cores", c) }
         childArgs += "launch"
@@ -847,10 +851,11 @@ object SparkSubmit extends CommandLineUtils with Logging {
         new MutableURLClassLoader(new Array[URL](0),
           Thread.currentThread.getContextClassLoader)
       }
+    // 获得ClassLoader
     Thread.currentThread.setContextClassLoader(loader)
 
-    for (jar <- childClasspath) {
-      addJarToClasspath(jar, loader)
+    for (jar <- childClasspath) { // 遍历classpath列表
+      addJarToClasspath(jar, loader) // 使用loader类加载器将jar包依赖加入classpath
     }
 
     var mainClass: Class[_] = null
@@ -877,7 +882,7 @@ object SparkSubmit extends CommandLineUtils with Logging {
         }
         System.exit(CLASS_NOT_FOUND_EXIT_STATUS)
     }
-
+    // 如果mainClass是SparkApplication的子类，返回SparkApplication的新实例
     val app: SparkApplication = if (classOf[SparkApplication].isAssignableFrom(mainClass)) {
       mainClass.newInstance().asInstanceOf[SparkApplication]
     } else {
@@ -885,6 +890,7 @@ object SparkSubmit extends CommandLineUtils with Logging {
       if (classOf[scala.App].isAssignableFrom(mainClass)) {
         printWarning("Subclasses of scala.App may not work correctly. Use a main() method instead.")
       }
+      // 返回一个包装了main方法的java类
       new JavaMainApplication(mainClass)
     }
 
@@ -899,6 +905,8 @@ object SparkSubmit extends CommandLineUtils with Logging {
     }
 
     try {
+      // 如果childMainClass不是SparkApplication的子类，则通过反射调用main方法
+      // 如果是，直接调用器start方法
       app.start(childArgs.toArray, sparkConf)
     } catch {
       case t: Throwable =>

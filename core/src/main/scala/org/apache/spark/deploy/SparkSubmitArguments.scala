@@ -118,7 +118,7 @@ private[deploy] class SparkSubmitArguments(args: Seq[String], env: Map[String, S
   //  移除sparkProperties属性配置中不是以spark.开头的变量。
   ignoreNonSparkProperties()
   // Use `sparkProperties` map along with env vars to fill in any missing parameters
-  //  使用sparkProperties和env变量去填充任何缺失的参数。
+  //  加载系统环境变量中的配置信息
   loadEnvironmentArguments()
 
   validateArguments()

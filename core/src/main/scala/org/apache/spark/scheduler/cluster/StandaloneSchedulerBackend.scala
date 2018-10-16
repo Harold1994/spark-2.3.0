@@ -120,6 +120,7 @@ private[spark] class StandaloneSchedulerBackend(
     client = new StandaloneAppClient(sc.env.rpcEnv, masters, appDesc, this, conf)
     client.start()
     launcherBackend.setState(SparkAppHandle.State.SUBMITTED)
+    // 等待登记注册
     waitForRegistration()
     launcherBackend.setState(SparkAppHandle.State.RUNNING)
   }

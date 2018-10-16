@@ -229,10 +229,11 @@ private[spark] class ClientApp extends SparkApplication {
 
   override def start(args: Array[String], conf: SparkConf): Unit = {
     val driverArgs = new ClientArguments(args)
-
+    // 设置rpc超时时间为10s
     if (!conf.contains("spark.rpc.askTimeout")) {
       conf.set("spark.rpc.askTimeout", "10s")
     }
+    // 日志级别为WARN
     Logger.getRootLogger.setLevel(driverArgs.logLevel)
     // 构建RPC环境实例
     val rpcEnv =
@@ -240,6 +241,7 @@ private[spark] class ClientApp extends SparkApplication {
     // 获取与Master进行通信终端
     val masterEndpoints = driverArgs.masters.map(RpcAddress.fromSparkURL).
       map(rpcEnv.setupEndpointRef(_, Master.ENDPOINT_NAME))
+    // 使用RpcEnv的setupEndpoint方法设置名为client的Endpoint，可与master通信
     rpcEnv.setupEndpoint("client", new ClientEndpoint(rpcEnv, driverArgs, masterEndpoints, conf))
     // 等待Master反馈并退出
     rpcEnv.awaitTermination()

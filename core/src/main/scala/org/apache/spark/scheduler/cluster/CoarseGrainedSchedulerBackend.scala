@@ -175,6 +175,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
     override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
 
       case RegisterExecutor(executorId, executorRef, hostname, cores, logUrls) =>
+        // 检查executorDataMap中是否包含这个executorId，如果包含，返回RegisterExecutorFailed
         if (executorDataMap.contains(executorId)) {
           executorRef.send(RegisterExecutorFailed("Duplicate executor ID: " + executorId))
           context.reply(true)
@@ -274,17 +275,21 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
     private def makeOffers(executorId: String) {
       // Make sure no executor is killed while some task is launching on it
       val taskDescs = CoarseGrainedSchedulerBackend.this.synchronized {
-        // Filter out executors under killing
+        // 过滤存活的Executor
         if (executorIsAlive(executorId)) {
+          // 根据executorId取出ExecutorData
           val executorData = executorDataMap(executorId)
+          // 使用ExecutorData创建workOffers对象，它代表Executor上可用的资源
           val workOffers = IndexedSeq(
             new WorkerOffer(executorId, executorData.executorHost, executorData.freeCores))
+          // 为任务分配资源，返回获得运行资源的任务的集合
           scheduler.resourceOffers(workOffers)
         } else {
           Seq.empty
         }
       }
       if (!taskDescs.isEmpty) {
+        // 运行Task
         launchTasks(taskDescs)
       }
     }

@@ -275,10 +275,14 @@ private[deploy] class Master(
       } else {
         logInfo("Registering app " + description.name)
         val app = createApplication(description, driver)
+        // 信息登记
         registerApplication(app)
         logInfo("Registered app " + description.name + " with ID " + app.id)
         persistenceEngine.addApplication(app)
         driver.send(RegisteredApplication(app.id, self))
+        // schedule两个作用：
+        // 一、完成Driver的调度：将waitingDrivers数组中的Driver发送到满足运行条件的Worker上运行
+        // 二、在满足条件的Worker上为Application启动Executor
         schedule()
       }
 
@@ -610,9 +614,9 @@ private[deploy] class Master(
    * allocated at a time, 12 cores from each worker would be assigned to each executor.
    * Since 12 < 16, no executors would launch [SPARK-8881].
     * 启动Executors有两种方式：
-    * 第一种方式是将应用程序的Executor部署到尽可能多的Executor上，这是默认方式
+    * 第一种方式是轮流均摊：将应用程序的Executor部署到尽可能多的Executor上，这是默认方式
     * 可以更好的实现数据本地性
-    * 第二种是将应用程序的Executor部署到尽可能少的Executor上， 通常用于计算密集型的应用
+    * 第二种是依次全占：将应用程序的Executor部署到尽可能少的Executor上， 通常用于计算密集型的应用
     *
     * 每个executor上的内核数可以配置。当显示配置时，如果一个Worker上拥有足够的
     * 内存大小和内核数，同一个应用程序就可以在该Worker上部署多个executor
@@ -708,6 +712,7 @@ private[deploy] class Master(
     for (app <- waitingApps) {
       val coresPerExecutor = app.desc.coresPerExecutor.getOrElse(1)
       // If the cores left is less than the coresPerExecutor,the cores left will not be allocated
+      // 遍历没有分配满核的Application
       if (app.coresLeft >= coresPerExecutor) {
         // Filter out workers that don't have enough resources to launch an executor
         // 过滤Workers，提出具有足够资源启动一个Executor的Workers
@@ -742,14 +747,16 @@ private[deploy] class Master(
       assignedCores: Int,
       coresPerExecutor: Option[Int],
       worker: WorkerInfo): Unit = {
-    // 如果指定了每个Executor上的内核个数，就将该Worker结点上分配到的内核
-    // 分给每个Executor， 如果没有指定，就将全部分配到的内核给一个Executor
+   // 如果Executor上指定了核的个数，使用分配的核的个数除以指定核的个数，确定要启动的Executor个数
+    // 若未指定，则只分配一个Ececutor，并占用分配的全部的核
     val numExecutors = coresPerExecutor.map { assignedCores / _ }.getOrElse(1)
+    // 如果coresPerExecutor为0， 则取assignedCores并赋给coresToAssign
     val coresToAssign = coresPerExecutor.getOrElse(assignedCores)
     for (i <- 1 to numExecutors) {
       // 为应用程序添加Executor，并启动Executor
       val exec = app.addExecutor(worker, coresToAssign)
       launchExecutor(worker, exec)
+      // 启动后将app状态设置为Running
       app.state = ApplicationState.RUNNING
     }
   }
@@ -761,6 +768,7 @@ private[deploy] class Master(
    * every time a new app joins or resource availability changes.
    */
   private def schedule(): Unit = {
+    // 若Master的状态不为Alive，直接退出
     if (state != RecoveryState.ALIVE) {
       return
     }
@@ -768,6 +776,7 @@ private[deploy] class Master(
     // 逻辑上需要先调度驱动程序，然后再为驱动程序的具体任务分配Executors
 
     // 对所有可分配Worker进行洗牌，可以帮助Driver均衡部署
+    // 可以看出Driver是在集群中随机的Worker上启动的
     val shuffledAliveWorkers = Random.shuffle(workers.toSeq.filter(_.state == WorkerState.ALIVE))
     val numWorkersAlive = shuffledAliveWorkers.size
     var curPos = 0
@@ -798,8 +807,10 @@ private[deploy] class Master(
   private def launchExecutor(worker: WorkerInfo, exec: ExecutorDesc): Unit = {
     logInfo("Launching executor " + exec.fullId + " on worker " + worker.id)
     worker.addExecutor(exec)
+    // 向Worker发送LaunchExecutor消息
     worker.endpoint.send(LaunchExecutor(masterUrl,
       exec.application.id, exec.id, exec.application.desc, exec.cores, exec.memory))
+    // 向Driver发回ExecutorAdded消息
     exec.application.driver.send(
       ExecutorAdded(exec.id, worker.id, worker.hostPort, exec.cores, exec.memory))
   }
@@ -882,17 +893,19 @@ private[deploy] class Master(
       ApplicationInfo = {
     val now = System.currentTimeMillis()
     val date = new Date(now)
+    // 由date生成appId
     val appId = newApplicationId(date)
     new ApplicationInfo(now, appId, desc, date, driver, defaultCores)
   }
 
   private def registerApplication(app: ApplicationInfo): Unit = {
     val appAddress = app.driver.address
+    // 如果Driver已经注册过，直接返回
     if (addressToApp.contains(appAddress)) {
       logInfo("Attempted to re-register application at same address: " + appAddress)
       return
     }
-
+    // 向度量系统注册
     applicationMetricsSystem.registerSource(app.appSource)
     apps += app
     idToApp(app.id) = app
