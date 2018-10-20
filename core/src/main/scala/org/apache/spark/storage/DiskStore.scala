@@ -52,7 +52,7 @@ private[spark] class DiskStore(
 
   /**
    * Invokes the provided callback function to write the specific block.
-   *
+   *  调用提供的回调函数writeFunc来写这个快
    * @throws IllegalStateException if the block already exists in the disk store.
    */
   def put(blockId: BlockId)(writeFunc: WritableByteChannel => Unit): Unit = {
@@ -61,15 +61,19 @@ private[spark] class DiskStore(
     }
     logDebug(s"Attempting to put block $blockId")
     val startTime = System.currentTimeMillis
+    // 获得对应blockId的文件名
     val file = diskManager.getFile(blockId)
+    // 使用nio没得到文件上的channel通道
     val out = new CountingWritableChannel(openForWrite(file))
     var threwException: Boolean = true
     try {
+      // 利用回调函数将bytes写入通道
       writeFunc(out)
       blockSizes.put(blockId, out.getCount)
       threwException = false
     } finally {
       try {
+        // 关闭通道
         out.close()
       } catch {
         case ioe: IOException =>
@@ -91,6 +95,7 @@ private[spark] class DiskStore(
   }
 
   def putBytes(blockId: BlockId, bytes: ChunkedByteBuffer): Unit = {
+    // 柯里化方式向put传入第二个参数
     put(blockId) { channel =>
       bytes.writeFully(channel)
     }
@@ -98,14 +103,16 @@ private[spark] class DiskStore(
 
   def getBytes(blockId: BlockId): BlockData = {
     val file = diskManager.getFile(blockId.name)
+    // 获取Blockl的大小
     val blockSize = getSize(blockId)
-
+    // 获取IO加密密钥
     securityManager.getIOEncryptionKey() match {
       case Some(key) =>
         // Encrypted blocks cannot be memory mapped; return a special object that does decryption
         // and provides InputStream / FileRegion implementations for reading the data.
+        // 如果加密，加密块不能进行内存映射; 返回一个执行解密的特殊对象，并提供InputStream / FileRegion实现来读取数据。
         new EncryptedBlockData(file, blockSize, conf, key)
-
+      // 若未加密，返回一个DiskBlockData
       case _ =>
         new DiskBlockData(minMemoryMapBytes, maxMemoryMapBytes, file, blockSize)
     }
@@ -178,17 +185,21 @@ private class DiskBlockData(
   }
 
   override def toByteBuffer(): ByteBuffer = {
+    // 如果目标块的大小超出了设置的内存映射最大值
     require(blockSize < maxMemoryMapBytes,
       s"can't create a byte buffer of size $blockSize" +
       s" since it exceeds ${Utils.bytesToString(maxMemoryMapBytes)}.")
+    // tryWithResource会默认在resource使用完后执行close方法
     Utils.tryWithResource(open()) { channel =>
       if (blockSize < minMemoryMapBytes) {
-        // For small files, directly read rather than memory map.
+        // minMemoryMapBytes默认是2M
+        // 对于小2M文件，直接读取而不是内存映射。
         val buf = ByteBuffer.allocate(blockSize.toInt)
         JavaUtils.readFully(channel, buf)
         buf.flip()
         buf
       } else {
+        // 以内存映射的方式读取文件内容
         channel.map(MapMode.READ_ONLY, 0, file.length)
       }
     }

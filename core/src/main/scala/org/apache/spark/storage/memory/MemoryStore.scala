@@ -87,7 +87,7 @@ private[spark] class MemoryStore(
 
   // Note: all changes to memory allocations, notably putting blocks, evicting blocks, and
   // acquiring or releasing unroll memory, must be synchronized on `memoryManager`!
-
+  // 初始容量32，负荷系数0.75,涉及到自动扩容，访问模型为顺序访问
   private val entries = new LinkedHashMap[BlockId, MemoryEntry[_]](32, 0.75f, true)
 
   // A mapping from taskAttemptId to amount of memory used for unrolling a block (in bytes)
@@ -137,6 +137,8 @@ private[spark] class MemoryStore(
    *
    * The caller should guarantee that `size` is correct.
    *
+    * 使用`size`来测试MemoryStore中是否有足够的空间。 如果是这样，
+    * 创建ByteBuffer并将其放入MemoryStore。 否则，将不会创建ByteBuffer。 调用者应该保证`size`是正确的。
    * @return true if the put() succeeded, false otherwise.
    */
   def putBytes[T: ClassTag](
@@ -144,7 +146,9 @@ private[spark] class MemoryStore(
       size: Long,
       memoryMode: MemoryMode,
       _bytes: () => ChunkedByteBuffer): Boolean = {
+    // 确保之前没有存过blockId对应的块
     require(!contains(blockId), s"Block $blockId is already present in the MemoryStore")
+    // 获取N个字节的内存来缓存给定的块，必要时驱逐现有的块。返回是否成功分配了空间
     if (memoryManager.acquireStorageMemory(blockId, size, memoryMode)) {
       // We acquired enough memory for the block, so go ahead and put it
       val bytes = _bytes()
@@ -492,6 +496,9 @@ private[spark] class MemoryStore(
    * Can fail if either the block is bigger than our memory or it would require replacing
    * another block from the same RDD (which leads to a wasteful cyclic replacement pattern for
    * RDDs that don't fit into memory that we want to avoid).
+    *
+    * 尝试驱逐块以释放给定数量的空间来存储特定的块。如果块大于我们的内存，或者需要从同一个RDD替换另一个块，
+    * 则会失败
    *
    * @param blockId the ID of the block we are freeing space for, if any
    * @param space the size of this block
@@ -507,13 +514,16 @@ private[spark] class MemoryStore(
       var freedMemory = 0L
       val rddToAdd = blockId.flatMap(getRddId)
       val selectedBlocks = new ArrayBuffer[BlockId]
+      // 内嵌方法，判断block是否可以移除
       def blockIsEvictable(blockId: BlockId, entry: MemoryEntry[_]): Boolean = {
+        // memoryMode 相同时， block所属的rdd为空或者rdd不是当前block所属rdd
         entry.memoryMode == memoryMode && (rddToAdd.isEmpty || rddToAdd != getRddId(blockId))
       }
       // This is synchronized to ensure that the set of entries is not changed
       // (because of getValue or getBytes) while traversing the iterator, as that
       // can lead to exceptions.
       entries.synchronized {
+        // 遍历entries
         val iterator = entries.entrySet().iterator()
         while (freedMemory < space && iterator.hasNext) {
           val pair = iterator.next()
@@ -523,6 +533,7 @@ private[spark] class MemoryStore(
             // We don't want to evict blocks which are currently being read, so we need to obtain
             // an exclusive write lock on blocks which are candidates for eviction. We perform a
             // non-blocking "tryLock" here in order to ignore blocks which are locked for reading:
+            // 移除时，不考虑正在被读取的block，为没有读取的block加写锁
             if (blockInfoManager.lockForWriting(blockId, blocking = false).isDefined) {
               selectedBlocks += blockId
               freedMemory += pair.getValue.size
@@ -536,6 +547,7 @@ private[spark] class MemoryStore(
           case DeserializedMemoryEntry(values, _, _) => Left(values)
           case SerializedMemoryEntry(buffer, _, _) => Right(buffer)
         }
+        // 调用BlockManager的方法删除block
         val newEffectiveStorageLevel =
           blockEvictionHandler.dropFromMemory(blockId, () => data)(entry.classTag)
         if (newEffectiveStorageLevel.isValid) {
@@ -548,7 +560,7 @@ private[spark] class MemoryStore(
           blockInfoManager.removeBlock(blockId)
         }
       }
-
+      // 可移除空间大于Block的size
       if (freedMemory >= space) {
         var lastSuccessfulBlock = -1
         try {
@@ -563,6 +575,7 @@ private[spark] class MemoryStore(
             // blocks and removing entries. However the check is still here for
             // future safety.
             if (entry != null) {
+              // 删除block
               dropBlock(blockId, entry)
               afterDropAction(blockId)
             }
@@ -574,6 +587,7 @@ private[spark] class MemoryStore(
         } finally {
           // like BlockManager.doPut, we use a finally rather than a catch to avoid having to deal
           // with InterruptedException
+          // 没有完成所有候选block释放，空间已经达到需求，需要对未处理的block释放锁
           if (lastSuccessfulBlock != selectedBlocks.size - 1) {
             // the blocks we didn't process successfully are still locked, so we have to unlock them
             (lastSuccessfulBlock + 1 until selectedBlocks.size).foreach { idx =>
@@ -583,6 +597,7 @@ private[spark] class MemoryStore(
           }
         }
       } else {
+        // 就算移除了其他块也没有足够的空间
         blockId.foreach { id =>
           logInfo(s"Will not store $id")
         }

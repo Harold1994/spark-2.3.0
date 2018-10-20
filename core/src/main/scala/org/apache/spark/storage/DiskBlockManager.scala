@@ -56,7 +56,9 @@ private[spark] class DiskBlockManager(conf: SparkConf, deleteFilesOnStop: Boolea
   def getFile(filename: String): File = {
     // Figure out which local directory it hashes to, and which subdirectory in that
     val hash = Utils.nonNegativeHash(filename)
+    // 使用非负哈希值对localDirs取余，得到目录id
     val dirId = hash % localDirs.length
+    // 得到子目录id
     val subDirId = (hash / localDirs.length) % subDirsPerLocalDir
 
     // Create the subdirectory if it doesn't already exist
@@ -73,7 +75,7 @@ private[spark] class DiskBlockManager(conf: SparkConf, deleteFilesOnStop: Boolea
         newDir
       }
     }
-
+    // 返回以subDir为根目录，filename作为文件名称的、File对象
     new File(subDir, filename)
   }
 
@@ -136,10 +138,13 @@ private[spark] class DiskBlockManager(conf: SparkConf, deleteFilesOnStop: Boolea
    * be deleted on JVM exit when using the external shuffle service.
    */
   private def createLocalDirs(conf: SparkConf): Array[File] = {
+    // 从SparkConf中找出配置的文件保存路径，路径可以配置多个，用逗号分开
     Utils.getConfiguredLocalDirs(conf).flatMap { rootDir =>
       try {
+        // 创建目录，并指定前缀，返回一个File对象
         val localDir = Utils.createDirectory(rootDir, "blockmgr")
         logInfo(s"Created local directory at $localDir")
+        // 返回创建好的目录
         Some(localDir)
       } catch {
         case e: IOException =>

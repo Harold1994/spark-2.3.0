@@ -286,7 +286,9 @@ private[spark] object Utils extends Logging {
    * newly created, and is not marked for automatic deletion.
    */
   def createDirectory(root: String, namePrefix: String = "spark"): File = {
+    // 重试次数
     var attempts = 0
+    // 最多重试10次
     val maxAttempts = MAX_DIR_CREATION_ATTEMPTS
     var dir: File = null
     while (dir == null) {
@@ -297,6 +299,7 @@ private[spark] object Utils extends Logging {
       }
       try {
         dir = new File(root, namePrefix + "-" + UUID.randomUUID.toString)
+        // 如果dir已经存在或者创建失败，置dir为null
         if (dir.exists() || !dir.mkdirs()) {
           dir = null
         }
