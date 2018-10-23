@@ -124,6 +124,7 @@ private[spark] class DiskBlockManager(conf: SparkConf, deleteFilesOnStop: Boolea
   }
 
   /** Produces a unique block id and File suitable for storing shuffled intermediate results. */
+  // 中间临时文件名的格式由前缀temp_shuffle_与UUID.randomUUID组成，可以唯一标识一个BlockId
   def createTempShuffleBlock(): (TempShuffleBlockId, File) = {
     var blockId = new TempShuffleBlockId(UUID.randomUUID())
     while (getFile(blockId).exists()) {

@@ -89,11 +89,17 @@ private[spark] class ShuffleMapTask(
       threadMXBean.getCurrentThreadCpuTime - deserializeStartCpuTime
     } else 0L
 
+
     var writer: ShuffleWriter[Any, Any] = null
     try {
+      // 先从SparkEnv获取shuffleManager
       val manager = SparkEnv.get.shuffleManager
+      // 从ShuffleDependency中获取注册到shuffleManager时得到的shuffleHandle
+      // 依据shuffleHandle和当前的Task对应的分区ID，获取ShuffleWriter
       writer = manager.getWriter[Any, Any](dep.shuffleHandle, partitionId, context)
+      // 写入当前分区的数据
       writer.write(rdd.iterator(partition, context).asInstanceOf[Iterator[_ <: Product2[Any, Any]]])
+      // 关闭writer
       writer.stop(success = true).get
     } catch {
       case e: Exception =>

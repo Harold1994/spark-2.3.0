@@ -314,9 +314,13 @@ object SparkEnv extends Logging {
         rpcEnv, mapOutputTracker.asInstanceOf[MapOutputTrackerMaster], conf))
 
     // Let the user specify short names for shuffle managers
+    // 短格式命名指定所使用的ShuffleManager
     val shortShuffleMgrNames = Map(
+      // 基于sort的Shuffle实现方式，也是默认的Shuffle方式，每个Mapper阶段的Task分别生成数据文件和索引文件
       "sort" -> classOf[org.apache.spark.shuffle.sort.SortShuffleManager].getName,
       "tungsten-sort" -> classOf[org.apache.spark.shuffle.sort.SortShuffleManager].getName)
+    // 指定shuffleManager的配置属性
+    // 默认为sort
     val shuffleMgrName = conf.get("spark.shuffle.manager", "sort")
     val shuffleMgrClass =
       shortShuffleMgrNames.getOrElse(shuffleMgrName.toLowerCase(Locale.ROOT), shuffleMgrName)

@@ -85,12 +85,13 @@ class ShuffleDependency[K: ClassTag, V: ClassTag, C: ClassTag](
   // methods in PairRDDFunctions are used instead of combineByKeyWithClassTag.
   private[spark] val combinerClassName: Option[String] =
     Option(reflect.classTag[C]).map(_.runtimeClass.getName)
+  // 针对特定rdd，每个shuffleId都是唯一的
   // 获取新的shuffleId
   val shuffleId: Int = _rdd.context.newShuffleId()
-  // 向shuffleManager注册Shuffle信息
+  // 向shuffleManager注册Shuffle信息，获取ShuffleHandle
   val shuffleHandle: ShuffleHandle = _rdd.context.env.shuffleManager.registerShuffle(
     shuffleId, _rdd.partitions.length, this)
-
+  // Shuffle数据其清理器的设置
   _rdd.sparkContext.cleaner.foreach(_.registerShuffleForCleanup(this))
 }
 

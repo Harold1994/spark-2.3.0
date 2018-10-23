@@ -143,6 +143,7 @@ class CoGroupedRDD[K: ClassTag](
 
       case shuffleDependency: ShuffleDependency[_, _, _] =>
         // Read map outputs of shuffle
+        // 先从SparkEnv获取shuffleManager，然后根据shuffleHandle和分区Id获取ShuffleReader
         val it = SparkEnv.get.shuffleManager
           .getReader(shuffleDependency.shuffleHandle, split.index, split.index + 1, context)
           .read()

@@ -31,18 +31,23 @@ private[spark] trait ShuffleManager {
 
   /**
    * Register a shuffle with the manager and obtain a handle for it to pass to tasks.
+    * 在Driver端向ShuffleManager注册一个Shuffle，获取一个Handle
+    * 在具体Task中会通过该Handler来读写数据
    */
   def registerShuffle[K, V, C](
       shuffleId: Int,
       numMaps: Int,
       dependency: ShuffleDependency[K, V, C]): ShuffleHandle
 
-  /** Get a writer for a given partition. Called on executors by map tasks. */
+  /** Get a writer for a given partition. Called on executors by map tasks.
+    * 获取给定分区所使用的shuffleWriter，该方法在Executor上执行各个Map任务时调用。
+    * */
   def getWriter[K, V](handle: ShuffleHandle, mapId: Int, context: TaskContext): ShuffleWriter[K, V]
 
   /**
    * Get a reader for a range of reduce partitions (startPartition to endPartition-1, inclusive).
    * Called on executors by reduce tasks.
+    * 获取在Reduce阶段读取分区的ShuffleReader，对应的分区由[startPartition,endPartition-1]决定
    */
   def getReader[K, C](
       handle: ShuffleHandle,
@@ -58,6 +63,7 @@ private[spark] trait ShuffleManager {
 
   /**
    * Return a resolver capable of retrieving shuffle block data based on block coordinates.
+    * 返回一个能够根据块坐标获取Shuffle块数据的ShuffleBlockResolver。
    */
   def shuffleBlockResolver: ShuffleBlockResolver
 

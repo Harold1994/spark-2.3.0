@@ -184,14 +184,17 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
     // generic throwables.
     boolean success = false;
     try {
+      // 对输入records，循环将每条记录插入到外部排序器
       while (records.hasNext()) {
         insertRecordIntoSorter(records.next());
       }
+      //  生成Data文件和Index文件
       closeAndWriteOutput();
       success = true;
     } finally {
       if (sorter != null) {
         try {
+          // 释放排序过程中使用的资源
           sorter.cleanupResources();
         } catch (Exception e) {
           // Only throw this error if we won't be masking another
@@ -225,23 +228,32 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
   void closeAndWriteOutput() throws IOException {
     assert(sorter != null);
     updatePeakMemoryUsed();
+    // 设为null,用于GC
     serBuffer = null;
     serOutputStream = null;
+    // 关闭sorter，所有的缓冲数据进行排序并写入磁盘，返回所有溢出文件的信息
     final SpillInfo[] spills = sorter.closeAndGetSpills();
     sorter = null;
     final long[] partitionLengths;
+    // 通过shuffleId，与map端该分区的partitionId创建一个名称为"shuffle_" + shuffleId + "_" + mapId + "_" + reduceId + ".data"的文件
     final File output = shuffleBlockResolver.getDataFile(shuffleId, mapId);
+    // 在合并后序Spill文件时先使用临时文件名，最终在重新命名为真正的输出文件名
+    // 即在writeIndexFileAndCommit方法中会重复通过块解析器获取输出文件名
     final File tmp = Utils.tempFileWith(output);
     try {
       try {
+        // 把spill文件合并到一起，根据不同情况，选择合适的合并方式
         partitionLengths = mergeSpills(spills, tmp);
       } finally {
+        // 清除生成的Spill文件
         for (SpillInfo spill : spills) {
           if (spill.file.exists() && ! spill.file.delete()) {
             logger.error("Error while deleting spill file {}", spill.file.getPath());
           }
         }
       }
+      // 将合并Spill后获取的分区及其数据量信息写入索引文件
+      // 并将临时数据文件重命名为真正的数据文件名
       shuffleBlockResolver.writeIndexFileAndCommit(shuffleId, mapId, partitionLengths, tmp);
     } finally {
       if (tmp.exists() && !tmp.delete()) {
@@ -254,16 +266,20 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
   @VisibleForTesting
   void insertRecordIntoSorter(Product2<K, V> record) throws IOException {
     assert(sorter != null);
+    // 对于多次访问的Key值，使用局部变量，避免多次函数调用
     final K key = record._1();
     final int partitionId = partitioner.getPartition(key);
+    // 先复位存放每条记录的缓冲区
     serBuffer.reset();
+    // 进一步使用序列化器从serBuffer缓冲区构建序列化输出流，将记录写入到缓冲区
     serOutputStream.writeKey(key, OBJECT_CLASS_TAG);
     serOutputStream.writeValue(record._2(), OBJECT_CLASS_TAG);
     serOutputStream.flush();
 
     final int serializedRecordSize = serBuffer.size();
     assert (serializedRecordSize > 0);
-
+    // 将记录插入到外部排序器中，serBuffer是一个字节数组
+    // 内部数据存放的偏移量为Platform.BYTE_ARRAY_OFFSET
     sorter.insertRecord(
       serBuffer.getBuf(), Platform.BYTE_ARRAY_OFFSET, serializedRecordSize, partitionId);
   }
@@ -277,28 +293,35 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
   /**
    * Merge zero or more spill files together, choosing the fastest merging strategy based on the
    * number of spills and the IO compression codec.
-   *
+   * 基于Spill个数以及I/O压缩码选择最快速的合并策略，返回包含合并文件中各个分区的数据长度的数组
    * @return the partition lengths in the merged file.
    */
   private long[] mergeSpills(SpillInfo[] spills, File outputFile) throws IOException {
+    // 是否使用压缩，默认为压缩，压缩方式由"spark.io.compression.codec"指定，默认是"lz4"
     final boolean compressionEnabled = sparkConf.getBoolean("spark.shuffle.compress", true);
     final CompressionCodec compressionCodec = CompressionCodec$.MODULE$.createCodec(sparkConf);
+    // 是否启动unsafe的快速合并
     final boolean fastMergeEnabled =
       sparkConf.getBoolean("spark.shuffle.unsafe.fastMergeEnabled", true);
+    // 不使用压缩或者codec支持对级联序列化流进行解压缩时，支持快速合并
     final boolean fastMergeIsSupported = !compressionEnabled ||
       CompressionCodec$.MODULE$.supportsConcatenationOfSerializedStreams(compressionCodec);
+    // 加密 "spark.io.encryption.enabled"，默认为false
     final boolean encryptionEnabled = blockManager.serializerManager().encryptionEnabled();
     try {
+      // 如果没有中间spills文件，创建一个空文件，并返回包含分区数据长度的空数组，后续读取时会滤掉空文件
       if (spills.length == 0) {
         new FileOutputStream(outputFile).close(); // Create an empty file
         return new long[partitioner.numPartitions()];
       } else if (spills.length == 1) {
+        // 只有一个文件，中间没有进行数据溢出，直接把文件移动到该路径下
         // Here, we don't need to perform any metrics updates because the bytes written to this
         // output file would have already been counted as shuffle bytes written.
         Files.move(spills[0].file, outputFile);
         return spills[0].partitionLengths;
       } else {
         final long[] partitionLengths;
+        // 当存在多个Spill中间文件时，根据不同的条件，采用不同的文件合并策略
         // There are multiple spills to merge, so none of these spill files' lengths were counted
         // towards our shuffle write count or shuffle write time. If we use the slow merge path,
         // then the final output file's size won't necessarily be equal to the sum of the spill
@@ -313,8 +336,11 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
           // Compression is disabled or we are using an IO compression codec that supports
           // decompression of concatenated compressed streams, so we can perform a fast spill merge
           // that doesn't need to interpret the spilled bytes.
+          // 不加密
           if (transferToEnabled && !encryptionEnabled) {
             logger.debug("Using transferTo-based fast merge");
+            // 通过NIO的方式合并各个spills的分区字节数据
+            // 仅在IO压缩码和序列化器支持序列化流的合并式安全
             partitionLengths = mergeSpillsWithTransferTo(spills, outputFile);
           } else {
             logger.debug("Using fileStream-based fast merge");
@@ -364,6 +390,7 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
     assert (spills.length >= 2);
     final int numPartitions = partitioner.numPartitions();
     final long[] partitionLengths = new long[numPartitions];
+    // 对应打开的输入流设为个数为spills的临时文件个数
     final InputStream[] spillInputStreams = new InputStream[spills.length];
 
     final OutputStream bos = new BufferedOutputStream(

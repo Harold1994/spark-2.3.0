@@ -121,18 +121,25 @@ final class BypassMergeSortShuffleWriter<K, V> extends ShuffleWriter<K, V> {
 
   @Override
   public void write(Iterator<Product2<K, V>> records) throws IOException {
+    // 为每个Reduce端的分区打开的DiskBlockObjectWriter存放于partitionWriters
+    // 需要根据具体Reduce端的分区数构建
     assert (partitionWriters == null);
     if (!records.hasNext()) {
       partitionLengths = new long[numPartitions];
+      // 初始化索引文件的内容，此时对应各个分区的数据量或偏移量需要在后续获取分区的真实数据量时重写
       shuffleBlockResolver.writeIndexFileAndCommit(shuffleId, mapId, partitionLengths, null);
       mapStatus = MapStatus$.MODULE$.apply(blockManager.shuffleServerId(), partitionLengths);
       return;
     }
     final SerializerInstance serInstance = serializer.newInstance();
     final long openStartTime = System.nanoTime();
+    // 对应每个分区各配置一个DiskBlockObjectWriter
     partitionWriters = new DiskBlockObjectWriter[numPartitions];
     partitionWriterSegments = new FileSegment[numPartitions];
+    // 这种写入方式下会打开numPartitions个DiskBlockObjectWriter
+      // 因此对应的分区数不应该设置的过大，避免过大的内存开销
     for (int i = 0; i < numPartitions; i++) {
+        // 得到临时shuffleBlockId和文件存储位置
       final Tuple2<TempShuffleBlockId, File> tempShuffleBlockIdPlusFile =
         blockManager.diskBlockManager().createTempShuffleBlock();
       final File file = tempShuffleBlockIdPlusFile._2();
@@ -144,7 +151,8 @@ final class BypassMergeSortShuffleWriter<K, V> extends ShuffleWriter<K, V> {
     // the disk, and can take a long time in aggregate when we open many files, so should be
     // included in the shuffle write time.
     writeMetrics.incWriteTime(System.nanoTime() - openStartTime);
-
+    // 读取每条记录，并根据分区器将该记录交给分区对应的DiskOjectWriter
+      // 写入各自对应的文件中
     while (records.hasNext()) {
       final Product2<K, V> record = records.next();
       final K key = record._1();
@@ -156,17 +164,21 @@ final class BypassMergeSortShuffleWriter<K, V> extends ShuffleWriter<K, V> {
       partitionWriterSegments[i] = writer.commitAndGet();
       writer.close();
     }
-
+    // 获取最终合并后的文件名
     File output = shuffleBlockResolver.getDataFile(shuffleId, mapId);
     File tmp = Utils.tempFileWith(output);
     try {
+        // 在此合并前生成的各个中间临时文件，并获取各个分区对应的数据量
+        // 由数据量可以得到对应的偏移量
       partitionLengths = writePartitionedFile(tmp);
+      // 重写Index文件中的偏移量信息
       shuffleBlockResolver.writeIndexFileAndCommit(shuffleId, mapId, partitionLengths, tmp);
     } finally {
       if (tmp.exists() && !tmp.delete()) {
         logger.error("Error while deleting temp file {}", tmp.getAbsolutePath());
       }
     }
+    // 封装并返回任务结果
     mapStatus = MapStatus$.MODULE$.apply(blockManager.shuffleServerId(), partitionLengths);
   }
 

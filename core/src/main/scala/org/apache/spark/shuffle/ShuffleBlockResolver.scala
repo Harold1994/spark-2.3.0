@@ -27,6 +27,9 @@ private[spark]
  * encapsulate shuffle data. This is used by the BlockStore to abstract over different shuffle
  * implementations when shuffle data is retrieved.
  */
+// 该特质的具体实现子类知道如何通过一个逻辑Shuffle块表示信息来
+// 获取一个块数据。具体实现可以使用文件或者文件段来封装Shuffle的数据
+// 在BlockStore使用
 trait ShuffleBlockResolver {
   type ShuffleId = Int
 
